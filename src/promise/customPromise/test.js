@@ -1,4 +1,3 @@
-
 var _Promise = require('./index.js')
 
 let promise = new _Promise(function(resolve, reject) {

@@ -1,6 +1,7 @@
 
 // Promise 状态
 var STATUS = {
+  FORK_PENDING: 'forkPending',
   PENDING: 'pending',
   RESOLVED: 'resolved',
   REJECTED: 'rejected',
@@ -12,7 +13,7 @@ var _resolutionProcedure = function (promise, x) {
 
   if (x === promise) {
     // 如果 x 和 promise 是同一个对象的引用(x === promise) ，那么 reject promise 并将一个TypeError 赋值给 reason
-    _reject.call(promise, new Error('Type Error'))
+    _reject.call(promise, new TypeError('Type Error'))
   } else if (x instanceof _Promise && x.status !== STATUS.PENDING) {
     // 如果 x 是一个 Promise 对象，则需要判断 x 的状态来决定 promise 的状态
     if (x.status === STATUS.RESOLVED) {
@@ -25,7 +26,7 @@ var _resolutionProcedure = function (promise, x) {
   } else if (typeof x === 'object' || typeof x === 'function') {
     if (x.then === undefined || x.then === null) {
       // 如果获取 x.then 的过程中抛出异常 e ，那么将 e 作为 reason 来 reject promise
-      _reject.call(promise, new Error('TypeError: Then should not be undefined or null'))
+      _reject.call(promise, new TypeError('TypeError: Then should not be undefined or null'))
     } else if (typeof x.then === 'function') {
       // 如果 x.then 是一个 Function，那么调用 x.then 并传入参数 resolvePromise 和 rejectPromise
       try {
@@ -64,44 +65,90 @@ var _resolutionProcedure = function (promise, x) {
   }
 }
 
+/**
+ * 用某个值来 resolve 当前 promise 对象
+ *
+ * @param  {Any} value    Promise 对象的结果值
+ */
 var _resolve = function (value) {
   var self = this
 
+  // onResolved 通过异步的方式执行，采用 micro-task 机制，这里用 process.nextTick 来模拟
   process.nextTick(function () {
     self.status = STATUS.RESOLVED
     self.value = value
 
     while (self.resolvedCallBacks.length) {
-      var callback = self.resolvedCallBacks.pop()
-      var x = callback(value)
-      var forkPromise = self.forkPromiseMap[callback]
+      // onResolved 只能被调用一次
+      var callback = self.resolvedCallBacks.shift()
+      try {
+        // onResolved 只会作为单纯的函数被调用
+        var x = callback(value)
+      } catch (err) {
+        // 从 forkPromise 容器中取出当前回调函数对应的 Promise 对象
+        var forkPromise = self.forkPromiseMap[callback]
+        // 如果 onResolved 抛出一个异常 e, 那么 forkPromise 必须 rejected 且 reason = e
+        _reject.call(forkPromise, err)
+        continue
+      }
 
+      // 从 forkPromise 容器中取出当前回调函数对应的 Promise 对象
+      var forkPromise = self.forkPromiseMap[callback]
+      // 如果 onResolved 没有抛出异常
+      // 则根据 x 的情况来决定 forkPromise 对象的状态
       _resolutionProcedure(forkPromise, x)
     }
   })
 }
 
+/**
+ * 用某个 reason 来 reject 当前 promise 对象
+ *
+ * @param  {Error} reason    包含 Promise 对象执行失败原因的 Error 对象
+ */
 var _reject = function (reason) {
   var self = this
 
+  // onRejected 通过异步的方式执行，采用 micro-task 机制，这里用 process.nextTick 来模拟
   process.nextTick(function () {
     self.status = STATUS.REJECTED
     self.reason = reason
 
     while (self.rejectedCallBacks.length) {
-      var callback = self.rejectedCallBacks.pop()
-      var x = callback(value)
-      var forkPromise = self.forkPromiseMap[callback]
+      // onRejected 只能被调用一次
+      var callback = self.rejectedCallBacks.shift()
+      try {
+        // onRejected 只会作为单纯的函数被调用
+        var x = callback(reason)
+      } catch (err) {
+        // 从 forkPromise 容器中取出当前回调函数对应的 Promise 对象
+        var forkPromise = self.forkPromiseMap[callback]
+        // 如果 onRejected 抛出一个异常 e, 那么 forkPromise 必须 rejected 且 reason = e
+        _reject.call(forkPromise, err)
+        continue
+      }
 
+      // 从 forkPromise 容器中取出当前回调函数对应的 Promise 对象
+      var forkPromise = self.forkPromiseMap[callback]
+      // 如果 onRejected 没有抛出异常
+      // 则根据 x 的情况来决定 forkPromise 对象的状态
       _resolutionProcedure(forkPromise, x)
     }
   })
 }
 
-function _Promise (callback) {
+function _Promise (callback, isFork) {
   var self = this
 
-  this.status = STATUS.PENDING
+  if (typeof callback !== 'function') {
+    throw new TypeError(`Promise resolver ${callback} is not a function`)
+  }
+
+  if (isFork) {
+    this.status = STATUS.FORK_PENDING
+  } else {
+    this.status = STATUS.PENDING
+  }
 
   this.resolvedCallBacks = []
   this.rejectedCallBacks = []
@@ -115,16 +162,36 @@ function _Promise (callback) {
   }
 
   try {
-    if (typeof callback === 'function') {
-      callback(resolve, reject)
+    if (this.status === STATUS.FORK_PENDING) {
+      // 当前 promise 是 then 方法产生的 forkPromise 时，
+      // 其状态的改变只应该由 _resolutionProcedure 操作来决定
+      // 所以此处不对其做任何操作
     } else {
-      resolve()
+      // 当前 promise 不是 then 方法产生的 forkPromise 时,
+      // 直接 resolve
+      callback(resolve, reject)
     }
   } catch (err) {
+    // 如果抛出异常的时候是 pending 状态，说明 resolve 回调还没有被执行，
+    // 此时直接用 err 对象作为 reason 进行 reject
     if (this.status === STATUS.PENDING) {
       reject(err)
     }
   }
+}
+
+/**
+ * 专供 then 方法用来产生 forkPromise 对象
+ *
+ * @param  {Function} callback    forkPromise 对象的回调函数
+ * @return {_Promise}             新的 forkPromise 对象
+ */
+_Promise.fork = function (callback) {
+  if (typeof callback !== 'function') {
+    callback = function () {}
+  }
+
+  return new _Promise(callback, true)
 }
 
 _Promise.prototype.then = function (onResolved, onRejected) {
@@ -142,7 +209,10 @@ _Promise.prototype.then = function (onResolved, onRejected) {
     _reject.call(this, this.reason)
   }
 
-  var forkPromise = new _Promise()
+  // then 方法会返回一个新的 Promise 实例对象
+  var forkPromise = _Promise.fork()
+  // 将当前 then 函数返回的 forkPromise 对象保存起来，方便当前 promise 对象状态变化时，
+  // 能根据 onResolved 或 onRejected 函数的返回值来修改 forkPromise 对象的状态
   this.forkPromiseMap[onResolved] = forkPromise
   this.forkPromiseMap[onRejected] = forkPromise
 
