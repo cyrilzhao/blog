@@ -120,3 +120,7 @@ Javascript 中还有一个 `instanceof` 操作符，它其实就是通过当前�
 
 - 第一条往下走是 `Function.prototype`，即各类构造函数 `Array`/`String`/`Object` 及自定义函数 `fun1`/`fun2` 等的 `__proto__`，最底端就是各类构造函数及自定义函数。
 - 第二条往下走是各类构造函数及自定义函数的 `prototype` 属性，即各类内置对象及自定义对象的 `__proto__` 属性，在经过自定义对象可能存在的多级 `__proto__` 属性原型链之后，最底端是各类内置对象及自定义对象。
+
+参考资料：
+
+[从__proto__和prototype来深入理解JS对象和原型链](https://github.com/creeperyang/blog/issues/9)
