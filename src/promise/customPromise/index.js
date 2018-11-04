@@ -14,9 +14,16 @@ var _resolutionProcedure = function (promise, x) {
   if (x === promise) {
     // 如果 x 和 promise 是同一个对象的引用(x === promise) ，那么 reject promise 并将一个TypeError 赋值给 reason
     _reject.call(promise, new TypeError('Type Error'))
-  } else if (x instanceof _Promise && x.status !== STATUS.PENDING) {
+  } else if (x instanceof _Promise) {
     // 如果 x 是一个 Promise 对象，则需要判断 x 的状态来决定 promise 的状态
-    if (x.status === STATUS.RESOLVED) {
+    if (x.status === STATUS.PENDING) {
+      // 如果 x 处于 pending 状态，那么 promise 也处于 pending 状态，直到 x 的状态变为 resolved 或者 rejected
+      x.then(function (value) {
+        _resolve.call(promise, value)
+      }, function (reason) {
+        _reject.call(promise, reason)
+      })
+    } else if (x.status === STATUS.RESOLVED) {
       // 如果 x 处于 resolved 状态，那么用 x 的 value 来 resolve promise
       _resolve.call(promise, x.value)
     } else {
@@ -29,24 +36,25 @@ var _resolutionProcedure = function (promise, x) {
       _reject.call(promise, new TypeError('TypeError: Then should not be undefined or null'))
     } else if (typeof x.then === 'function') {
       // 如果 x.then 是一个 Function，那么调用 x.then 并传入参数 resolvePromise 和 rejectPromise
-      try {
-        var resolvePromise = function(y) {
-          // 如果 resolvePromise 和 rejectPromise 同时被调用，或被用相同的参数调用多次，那么应该只处理第一次调用，之后的调用都应该被忽略
-          if (!isOnResolvedCalled && !isOnRejectedCalled) {
-            // 如果 resolvePromise 被调用且传入的参数为 y，那么再次执行此操作，参数为 (promise, y)
-            _resolutionProcedure(promise, y)
-            isOnResolvedCalled = true
-          }
-        }
-        var rejectPromise = function (r) {
-          // 如果 resolvePromise 和 rejectPromise 同时被调用，或被用相同的参数调用多次，那么应该只处理第一次调用，之后的调用都应该被忽略
-          if (!isOnResolvedCalled && !isOnRejectedCalled) {
-            // 如果 rejectPromise 被调用且传入的参数为 r，那么将 r 作为 reason 来 reject promise
-            _reject.call(promise, r)
-            isOnRejectedCalled = true
-          }
-        }
 
+      var resolvePromise = function(y) {
+        // 如果 resolvePromise 和 rejectPromise 同时被调用，或被用相同的参数调用多次，那么应该只处理第一次调用，之后的调用都应该被忽略
+        if (!isOnResolvedCalled && !isOnRejectedCalled) {
+          // 如果 resolvePromise 被调用且传入的参数为 y，那么再次执行此操作，参数为 (promise, y)
+          _resolutionProcedure(promise, y)
+          isOnResolvedCalled = true
+        }
+      }
+      var rejectPromise = function (r) {
+        // 如果 resolvePromise 和 rejectPromise 同时被调用，或被用相同的参数调用多次，那么应该只处理第一次调用，之后的调用都应该被忽略
+        if (!isOnResolvedCalled && !isOnRejectedCalled) {
+          // 如果 rejectPromise 被调用且传入的参数为 r，那么将 r 作为 reason 来 reject promise
+          _reject.call(promise, r)
+          isOnRejectedCalled = true
+        }
+      }
+
+      try {
         x.then(resolvePromise, rejectPromise)
       } catch (err) {
         // 如果调用 x.then 抛出了异常 e，若在抛出异常前已经调用过 resolvePromise 或 rejectPromise，那么忽略异常即可
